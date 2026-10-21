@@ -34,12 +34,14 @@ def parse_pdf_with_ai(text_content, api_key):
     prompt = f"""
     Jsi expertní datový parser. Z následujícího textu z PDF ceníku vytáhni všechny produkty.
     Pro každý produkt vytáhni tyto parametry:
-    - code (kód produktu nebo EAN, pokud chybí, vygeneruj unikátní kód)
+    - code (kód produktu nebo EAN; pokud chybí, vygeneruj např. KOD1, KOD2...)
     - name (přesný název produktu)
-    - price (cena bez DPH jako číslo)
+    - price (cena bez DPH jako číslo; pokud nelze určit, dej 0)
     - stock (skladová zásoba jako číslo, pokud není uvedeno, dej 10)
 
+    Pokud v textu nejsou žádné produkty nebo položky ceníku, vrať prázdné pole [].
     Vrať výhradně čistý JSON array objektů bez jakéhokoliv dalšího textu nebo Markdownu.
+    
     Příklad formátu:
     [
       {{"code": "ABC123", "name": "Produkt X", "price": 150.50, "stock": 10}}
@@ -68,37 +70,48 @@ if uploaded_file and api_key:
         with st.spinner("Čtu PDF a extrahuji data pomocí AI..."):
             try:
                 pdf_text = extract_text_from_pdf(uploaded_file)
-                parsed_data = parse_pdf_with_ai(pdf_text, api_key)
-                
-                df = pd.DataFrame(parsed_data)
-                
-                # Namapování na povinné sloupce pro Shoptet import
-                shoptet_df = pd.DataFrame({
-                    "code": df["code"],
-                    "pairCode": "",
-                    "name": df["name"],
-                    "price": df["price"],
-                    "standardPrice": df["price"],
-                    "vat": vat_default,
-                    "amount": df["stock"],
-                    "unit": "ks",
-                    "visible": 1
-                })
-                
-                st.success(f"Úspěšně zpracováno {len(shoptet_df)} položek!")
-                st.subheader("Náhled vygenerovaných dat pro Shoptet")
-                st.dataframe(shoptet_df)
-                
-                # Generování CSV v kódování UTF-8 s window-friendly oddělovačem
-                csv_buffer = io.StringIO()
-                shoptet_df.to_csv(csv_buffer, index=False, sep=";")
-                
-                st.download_button(
-                    label="📥 Stáhnout Shoptet CSV",
-                    data=csv_buffer.getvalue().encode('utf-8-sig'),
-                    file_name="shoptet_import.csv",
-                    mime="text/csv"
-                )
+                if not pdf_text.strip():
+                    st.error("V PDF nebyl nalezen žádný čitelný text (může jít o naskenovaný obrázek bez OCR).")
+                else:
+                    parsed_data = parse_pdf_with_ai(pdf_text, api_key)
+                    
+                    if not parsed_data:
+                        st.warning("AI v nahraném dokumentu nenašla žádné produkty/položky ceníku.")
+                    else:
+                        df = pd.DataFrame(parsed_data)
+                        
+                        # Bezpečné doplnění chybějících sloupců
+                        for col in ["code", "name", "price", "stock"]:
+                            if col not in df.columns:
+                                df[col] = "" if col in ["code", "name"] else 0
+                        
+                        # Namapování na povinné sloupce pro Shoptet import
+                        shoptet_df = pd.DataFrame({
+                            "code": df["code"],
+                            "pairCode": "",
+                            "name": df["name"],
+                            "price": df["price"],
+                            "standardPrice": df["price"],
+                            "vat": vat_default,
+                            "amount": df["stock"],
+                            "unit": "ks",
+                            "visible": 1
+                        })
+                        
+                        st.success(f"Úspěšně zpracováno {len(shoptet_df)} položek!")
+                        st.subheader("Náhled vygenerovaných dat pro Shoptet")
+                        st.dataframe(shoptet_df)
+                        
+                        # Generování CSV v kódování UTF-8 s window-friendly oddělovačem
+                        csv_buffer = io.StringIO()
+                        shoptet_df.to_csv(csv_buffer, index=False, sep=";")
+                        
+                        st.download_button(
+                            label="📥 Stáhnout Shoptet CSV",
+                            data=csv_buffer.getvalue().encode('utf-8-sig'),
+                            file_name="shoptet_import.csv",
+                            mime="text/csv"
+                        )
             except Exception as e:
                 st.error(f"Chyba při zpracování: {str(e)}")
 elif uploaded_file and not api_key:
